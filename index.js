@@ -8,12 +8,10 @@ const nodemailer = require('nodemailer');
 const cookieParser = require('cookie-parser'); 
 require('dotenv').config();
 
+
 const app = express();
 const PORT = process.env.PORT || 3000;
-
 app.use(express.json({ limit: '10mb' })); 
-
-
 
 const allowedOrigins = [
   'http://localhost:5173', 
@@ -74,6 +72,86 @@ const eventSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 const Event = mongoose.model('Event', eventSchema);
+
+function generateOTP() {
+  return crypto.randomBytes(3).toString('hex').slice(0, 6).toUpperCase();
+}
+
+
+const confirmedUserSchema = new mongoose.Schema({
+  name: String,
+  email: String,
+  otp: { type: String, unique: true },
+  eventname: String,
+  seats: Number, // Add seats field
+});
+
+
+const ConfirmedUser = mongoose.model('ConfirmedUser', confirmedUserSchema);
+
+
+app.post('/confirmEvent', async (req, res) => {
+  const { name, email, eventname, seats } = req.body;
+
+  let otp;
+  let unique = false;
+  let attemptCount = 0;
+  const maxAttempts = 10;
+
+  while (!unique && attemptCount < maxAttempts) {
+    otp = generateOTP();
+    const existingUser = await ConfirmedUser.findOne({ otp });
+
+    if (!existingUser) {
+      unique = true;
+    }
+
+    attemptCount++;
+  }
+
+  if (!unique) {
+    return res.status(400).send({ error: 'Failed to generate unique OTP' });
+  }
+
+  const newUser = new ConfirmedUser({ name, email, otp, eventname, seats });
+
+  try {
+    await newUser.save();
+    res.status(201).send({ message: 'User registered successfully', otp });
+  } catch (error) {
+    console.error('Error saving user:', error);
+    res.status(400).send({ error: 'Error registering user' });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 const generateToken = (res, userId) => {
   const token = jwt.sign({ userId }, process.env.JWT_SECRET_KEY, {
@@ -255,45 +333,79 @@ app.post('/events', async (req, res) => {
     res.status(500).json({ message: 'Internal server error', error: err.message });
   }
 });
-app.post('/register/:eventId', async (req, res) => {
-  const { eventId } = req.params;
+
+
+// Register Event
+app.post('/register/:eventId/:eventname', async (req, res) => {
+  const { eventId, eventname } = req.params;
   const { name, mobile, seats } = req.body;
+
+  // Validate seats
   if (seats <= 0) {
     return res.status(400).json({ message: 'Seats must be a positive number' });
   }
+
   try {
+    // Find the event by ID
     const event = await Event.findById(eventId);
     if (!event) {
       return res.status(404).json({ message: 'Event not found' });
     }
+
+    // Calculate remaining seats
     const totalSeatsTaken = event.attendees.reduce((acc, attendee) => acc + attendee.seats, 0);
     const remainingSeats = event.participationNumber - totalSeatsTaken;
+
+    // Check if enough seats are available
     if (remainingSeats < seats) {
       return res.status(400).json({ message: `Only ${remainingSeats} seats remaining` });
     }
+
+    // Register attendee
     event.attendees.push({ name, mobile, seats });
-    event.seatsTaken = totalSeatsTaken + seats; 
+    event.seatsTaken = totalSeatsTaken + seats;
     await event.save();
+
+    // Respond with success message and updated event
     res.status(200).json({ message: 'Registration successful', event });
   } catch (error) {
     console.error('Error registering for event:', error);
     res.status(500).json({ message: 'Internal server error', error: error.message });
   }
 });
-app.delete('/events/:eventId', async(req, res) => {
+
+
+
+
+
+
+
+
+
+
+
+//  Delete Event API 
+
+
+app.delete('/events/:eventId', async (req, res) => {
   const { eventId } = req.params;
-  try{
+  
+  try {
     const event = await Event.findByIdAndDelete(eventId);
-    if(!event){
-      return res.status(404).json({message: 'Event Not found' });
+    
+    if (!event) {
+      return res.status(404).json({ message: 'Event Not Found' });
     }
-    res.status(200).json({message: 'Event Deleted Successfully'});
-  }
-  catch (error) {
+    
+    res.status(200).json({ message: 'Event Deleted Successfully' });
+  } catch (error) {
     console.error('Error deleting event:', error);
-    res.status(500).json({ message: 'Internal server error', error: error.message });
+    res.status(500).json({ message: 'Internal Server Error', error: error.message });
   }
 });
+
+
+
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
